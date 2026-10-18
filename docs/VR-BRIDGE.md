@@ -4,9 +4,9 @@
 Здесь всё, что решили и выяснили 18.10.2026, и пошаговый план для продолжения на другом Mac (в том числе для
 новой сессии Claude Code, у которой нет контекста прошлой).
 
-> Статус на момент написания: фаза 0 в процессе. Фикс `pipe2` внесён в скрипт сборки, но **полная сборка ещё
-> ни разу не доходила до конца** (её прервали). Всё, что помечено «не проверено», — выводы из чтения кода и
-> документации, а не результат запуска.
+> Статус на 18.10.2026: фаза 0 почти закрыта. Движок 2.0.90 и компоненты BasaltVR собираются в GitHub Actions
+> (раздел 8.3a). Ничего ещё не запускалось на Mac и в шлеме; фикс `pipe2` проверен только по исходникам, не
+> сборкой с SDK 27. Всё, что помечено «не проверено», — выводы из чтения кода и документации.
 
 ---
 
@@ -140,7 +140,8 @@ DLL, ключи VR) можно класть в реестр бутылки — �
 ### Фаза 0. Основа ← мы здесь
 - [x] Форк, ветка `vr-bridge`
 - [x] Фикс `pipe2` в `build-engine-d3dmetal.sh`
-- [ ] Полная сборка движка на личном Mac (раздел 8)
+- [x] Сборка движка и BasaltVR в GitHub Actions (раздел 8.3a)
+- [ ] Сборка движка на личном Mac с SDK 27 — единственная настоящая проверка фикса `pipe2` (раздел 8.3)
 - [ ] Проверить, что движок запускается в MaPC через свой манифест (обычная не-VR игра)
 - [ ] PR фикса `pipe2` в upstream (отдельная ветка от `origin/main`, только этот коммит)
 
@@ -213,6 +214,33 @@ engine/build-engine-d3dmetal.sh 2.0.90 2>&1 | tee /tmp/engine-build.log
 grep -n "pipe2" engine/.cache/cx/build/configure.out     # ожидается: checking for pipe2... (cached) no
 grep -n "HAVE_PIPE2" engine/.cache/cx/build/include/config.h   # ожидается: /* #undef HAVE_PIPE2 */
 nm -u engine/.cache/cx/stage/lib/wine/x86_64-unix/ntdll.so | grep pipe2   # ожидается: пусто
+```
+
+### 8.3a. Или взять готовое из GitHub Actions
+Собирать локально не обязательно — в форке два workflow (вкладка Actions, запуск вручную или по push в
+`vr-bridge`):
+
+| Workflow | Что даёт | Время |
+|---|---|---|
+| `Build engine` (`.github/workflows/build-engine.yml`) | Движок 2.x + манифест + логи сборки | ~40 мин |
+| `Build BasaltVR` (`.github/workflows/build-basalt.yml`) | Форк DXMT (IOSurface), `basalt_openxr.dll`, тестовые программы для Wine, `basalt-streamer`/`basaltctl`/`BasaltVR` | ~30 мин (LLVM потом из кеша) |
+
+Первые успешные сборки (18.10.2026): движок 2.0.90 — run `39140324519`, sha256
+`92b53dcfd5899321e57f070c28e1be3aaee3a06a5912152780edbf4b9fe6cadd`; BasaltVR `6116e59` — run `39140512430`.
+Артефакты хранятся 90 дней.
+
+Раннер — macOS 15.7, Xcode 16.4, SDK 15.5: в этом SDK `pipe2` ещё нет, так что CI-движок не затронут
+проблемой из раздела 5 и проверка там проходит тривиально. Сам фикс проверяется только сборкой с SDK 27.
+
+Скачать и переписать манифест на локальный путь (манифест из CI указывает внутрь раннера):
+```bash
+mkdir -p ~/macade-engines && cd ~/macade-engines
+gh run download 39140324519 -R alexpialetski/macadekit-vr -n macade-engine-2.0.90
+F=macade-engine-2.0.90.tar.xz
+python3 ~/path/to/macadekit-vr/engine/manifest-add.py engine-manifest.json 2.0.90 \
+  "file://$PWD/$F" "$(shasum -a 256 $F | cut -d' ' -f1)" "$(stat -f%z $F)" d3dMetal
+# BasaltVR:
+gh run download 39140512430 -R alexpialetski/macadekit-vr -D basalt
 ```
 
 ### 8.4. Запуск движка в MaPC
