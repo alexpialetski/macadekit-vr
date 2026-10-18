@@ -64,7 +64,10 @@ if [ "${RESUME:-0}" != 1 ] || [ ! -f "$WORK/build/Makefile" ]; then
   rm -rf "$WORK/sources/wine" "$WORK/build"
   tar -xzf "$CACHE/$CX_NAME" -C "$WORK" sources/wine
   mkdir -p "$WORK/build"
-  ( cd "$WORK/build" && "${CLEAN_ENV[@]}" \
+  # The macOS 27 SDK declares pipe2() (available from macOS 27). Against the 14.0 deployment target it is
+  # weak-linked, so on older macOS ntdll's server_pipe() calls a null pointer and every launch crashes.
+  # Wine falls back to pipe() + FD_CLOEXEC without it.
+  ( cd "$WORK/build" && "${CLEAN_ENV[@]}" ac_cv_func_pipe2=no \
       CC="clang -arch x86_64" CXX="clang++ -arch x86_64" OBJC="clang -arch x86_64" \
       FREETYPE_CFLAGS="-I$DEPS/include/freetype2" FREETYPE_LIBS="-L$DEPS/lib -lfreetype" \
       GNUTLS_CFLAGS="-I$DEPS/include" GNUTLS_LIBS="-L$DEPS/lib -lgnutls" \
@@ -100,6 +103,10 @@ for so in ntdll win32u bcrypt winebus; do
   cmds="$(otool -l "$W/lib/wine/x86_64-unix/$so.so")"
   grep -q "path @loader_path/../../ " <<<"$cmds" || { echo "no rpath in $so.so" >&2; exit 1; }
 done
+# pipe2 must not be imported (see configure above), or the engine only starts on macOS 27 and later.
+if nm -u "$W/lib/wine/x86_64-unix/ntdll.so" | grep -qx "_pipe2"; then
+  echo "ntdll.so imports pipe2 (macOS 27+ only)" >&2; exit 1
+fi
 for lib in libfreetype.6.dylib libgnutls.30.dylib libSDL2-2.0.0.dylib libvulkan.1.dylib; do
   [ -f "$W/lib/$lib" ] || { echo "runtime library missing: $lib" >&2; exit 1; }
 done
