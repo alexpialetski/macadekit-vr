@@ -1,0 +1,71 @@
+# Builds BasaltVR's VR pieces (MIT) at a pinned commit: its DXMT v0.80 fork with IOSurface export, the PE
+# OpenXR runtime that runs inside Wine, and the native streamer. Reference for the VR engine (docs/VR-BRIDGE.md).
+name: Build BasaltVR
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: BasaltVR commit
+        default: 6116e59124ef0f11ba157571b6f44f901eb6ba59
+  push:
+    branches: [vr-bridge]
+    paths: [.github/workflows/build-basalt.yml]
+
+env:
+  BASALT_REF: ${{ inputs.ref || '6116e59124ef0f11ba157571b6f44f901eb6ba59' }}
+
+jobs:
+  basalt:
+    runs-on: macos-15
+    timeout-minutes: 240
+    defaults:
+      run:
+        working-directory: basalt
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: frenchbaguetteman/BasaltVR
+          ref: ${{ env.BASALT_REF }}
+          path: basalt
+
+      - name: Toolchain
+        run: |
+          sw_vers; xcodebuild -version; echo "SDK $(xcrun --show-sdk-version)"
+          brew install cmake mingw-w64 meson ninja
+          xcrun -sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+
+      # LLVM 15 static libs for DXMT take tens of minutes to build; keep them between runs.
+      - name: LLVM cache
+        uses: actions/cache@v4
+        with:
+          path: basalt/runtime/build/dxmt/toolchain/llvm-darwin
+          key: basalt-llvm-15.0.7-macos14-${{ runner.arch }}
+
+      - name: DXMT fork
+        run: |
+          runtime/scripts/build-dxmt-fork.zsh
+          runtime/scripts/verify-dxmt-artifacts.zsh
+
+      - name: OpenXR runtime (PE)
+        run: make runtime-build
+
+      - name: Streamer and app
+        run: |
+          make build
+          echo "SWIFT_BIN=$(swift build -c release --arch arm64 --package-path streamer --show-bin-path)" >> "$GITHUB_ENV"
+
+      - name: Collect
+        run: |
+          out="$GITHUB_WORKSPACE/out"; mkdir -p "$out/dxmt" "$out/runtime" "$out/streamer"
+          cp -R runtime/build/dxmt/fork-install/. "$out/dxmt/"
+          cp runtime/build/bin/* "$out/runtime/"
+          for exe in basalt-streamer basaltctl BasaltVR; do cp "$SWIFT_BIN/$exe" "$out/streamer/"; done
+          cp LICENSE THIRD_PARTY_NOTICES.md "$out/"; cp -R LICENSES "$out/"
+          echo "BasaltVR $BASALT_REF" > "$out/SOURCE.txt"
+          find "$out" -type f | sort
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: basalt-${{ env.BASALT_REF }}
+          path: out
