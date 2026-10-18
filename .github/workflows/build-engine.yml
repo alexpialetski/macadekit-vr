@@ -1,0 +1,73 @@
+# Builds the 2.x engine (Wine from CrossOver's source) on a GitHub macOS runner, so it never has to be
+# built locally. The engine and its manifest are uploaded as a workflow artifact.
+name: Build engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Engine version (keep it well above MaPC's own, e.g. 2.0.90)
+        default: 2.0.90
+      runner:
+        description: macOS runner image
+        default: macos-15
+  push:
+    branches: [vr-bridge]
+    paths: [engine/**, .github/workflows/build-engine.yml]
+
+env:
+  VERSION: ${{ inputs.version || '2.0.90' }}
+
+jobs:
+  engine:
+    runs-on: ${{ inputs.runner || 'macos-15' }}
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          echo "SDK $(xcrun --show-sdk-version) at $(xcrun --show-sdk-path)"
+          sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
+          # configure runs x86_64 test programs
+          arch -x86_64 /usr/bin/true || sudo softwareupdate --install-rosetta --agree-to-license
+          brew install bison pkgconf freetype gnutls sdl2 mingw-w64
+
+      - name: Download cache
+        uses: actions/cache@v4
+        with:
+          path: engine/.cache/dl
+          key: engine-dl-${{ hashFiles('engine/build-engine-d3dmetal.sh') }}
+          restore-keys: engine-dl-
+
+      - name: Build
+        run: engine/build-engine-d3dmetal.sh "$VERSION"
+
+      - name: Check pipe2 fix
+        run: |
+          grep -n "pipe2" engine/.cache/cx/build/configure.out || true
+          grep -n "HAVE_PIPE2" engine/.cache/cx/build/include/config.h
+          ! nm -u engine/.cache/cx/stage/lib/wine/x86_64-unix/ntdll.so | grep -x _pipe2
+
+      - name: Upload engine
+        uses: actions/upload-artifact@v4
+        with:
+          name: macade-engine-${{ env.VERSION }}
+          path: |
+            engine/dist/macade-engine-${{ env.VERSION }}.tar.xz
+            engine/dist/engine-manifest.json
+          compression-level: 0
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ env.VERSION }}
+          path: |
+            engine/.cache/cx/build/configure.out
+            engine/.cache/cx/build/config.log
+            engine/.cache/cx/build/make.out
+            engine/.cache/cx/build/install.out
+          if-no-files-found: ignore
